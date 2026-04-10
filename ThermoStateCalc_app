@@ -1,0 +1,161 @@
+#region imports
+import sys
+from ThermoStateCalc import Ui__frm_StateCalculator
+from pyXSteam.XSteam import XSteam
+from PyQt5.QtWidgets import QWidget, QApplication
+from UnitConversion import UC
+from scipy.optimize import fsolve
+#endregion
+
+#region class definitions
+class thermoSatProps:
+    def __init__(self, p=None, t=None, SI=True):
+        self.steamTable = XSteam(XSteam.UNIT_SYSTEM_MKS)
+        if p is not None:
+            self.getSatProps(p, SI)
+        elif t is not None:
+            self.getSatProps(self.steamTable.psat_t(t), SI)
+
+    def getSatProps(self, p, SI=True):
+        self.steamTable = XSteam(XSteam.UNIT_SYSTEM_MKS if SI else XSteam.UNIT_SYSTEM_FLS)
+        self.pSat = p
+        self.tSat = self.steamTable.tsat_p(p)
+        self.vf = self.steamTable.vL_p(p)
+        self.vg = self.steamTable.vV_p(p)
+        self.hf = self.steamTable.hL_p(p)
+        self.hg = self.steamTable.hV_p(p)
+        self.uf = self.steamTable.uL_p(p)
+        self.ug = self.steamTable.uV_p(p)
+        self.sf = self.steamTable.sL_p(p)
+        self.sg = self.steamTable.sV_p(p)
+
+class thermoState:
+    def __init__(self, p=None, t=None, v=None, u=None, h=None, s=None, x=None):
+        self.steamTable = XSteam(XSteam.UNIT_SYSTEM_MKS)
+        self.region = "saturated"
+        self.p = p
+        self.t = t
+        self.v = v
+        self.u = u
+        self.h = h
+        self.s = s
+        self.x = x
+
+    def clamp(self, x, low, high):
+        return max(low, min(x, high))
+
+    def between(self, x, low, high):
+        return low <= x <= high
+
+    def computeProperties(self):
+        if self.region == "two-phase":
+            uf = self.steamTable.uL_p(self.p)
+            ug = self.steamTable.uV_p(self.p)
+            hf = self.steamTable.hL_p(self.p)
+            hg = self.steamTable.hV_p(self.p)
+            sf = self.steamTable.sL_p(self.p)
+            sg = self.steamTable.sV_p(self.p)
+            vf = self.steamTable.vL_p(self.p)
+            vg = self.steamTable.vV_p(self.p)
+
+            self.u = uf + self.x * (ug - uf)
+            self.h = hf + self.x * (hg - hf)
+            self.s = sf + self.x * (sg - sf)
+            self.v = vf + self.x * (vg - vf)
+        else:
+            self.u = self.steamTable.u_pt(self.p, self.t)
+            self.h = self.steamTable.h_pt(self.p, self.t)
+            self.s = self.steamTable.s_pt(self.p, self.t)
+            self.v = self.steamTable.v_pt(self.p, self.t)
+            self.x = 1.0 if self.region == "super-heated vapor" else 0.0
+
+    def setState(self, stProp1, stProp2, val1, val2, SI=True):
+        self.steamTable = XSteam(XSteam.UNIT_SYSTEM_MKS if SI else XSteam.UNIT_SYSTEM_FLS)
+
+        SP = [stProp1.lower(), stProp2.lower()]
+        f1, f2 = float(val1), float(val2)
+
+        if 'p' in SP:
+            self.p = f1 if SP[0] == 'p' else f2
+            other = f2 if SP[0] == 'p' else f1
+            otherType = SP[1] if SP[0] == 'p' else SP[0]
+
+            tSat = self.steamTable.tsat_p(self.p)
+
+            if otherType == 't':
+                self.t = other
+                if self.t < tSat:
+                    self.region = "sub-cooled liquid"
+                elif self.t > tSat:
+                    self.region = "super-heated vapor"
+                else:
+                    self.region = "two-phase"
+                    self.x = 0.5
+
+            elif otherType == 'h':
+                self.h = other
+                hf = self.steamTable.hL_p(self.p)
+                hg = self.steamTable.hV_p(self.p)
+
+                if self.h < hf:
+                    self.region = "sub-cooled liquid"
+                elif self.h > hg:
+                    self.region = "super-heated vapor"
+                else:
+                    self.region = "two-phase"
+                    self.x = (self.h - hf) / (hg - hf)
+                    self.t = tSat
+
+        self.computeProperties()
+
+    def __sub__(self, other):
+        delta = thermoState()
+        delta.p = self.p - other.p
+        delta.t = self.t - other.t
+        delta.h = self.h - other.h
+        delta.u = self.u - other.u
+        delta.s = self.s - other.s
+        delta.v = self.v - other.v
+        return delta
+
+class main_window(QWidget, Ui__frm_StateCalculator):
+    def __init__(self):
+        super().__init__()
+        self.setupUi(self)
+        self.SetupSlotsAndSignals()
+        self.steamTable = XSteam(XSteam.UNIT_SYSTEM_MKS)
+        self.currentUnits = 'SI'
+        self.setUnits()
+        self.show()
+
+    def SetupSlotsAndSignals(self):
+        self._pb_Calculate.clicked.connect(self.calculateProperties)
+
+    def calculateProperties(self):
+        self.state1 = thermoState()
+        self.state2 = thermoState()
+
+        SI = True
+
+        try:
+            f1 = float(self._le_Property1.text())
+            f2 = float(self._le_Property2.text())
+        except:
+            f1, f2 = 0.0, 0.0
+
+        self.state1.setState('p', 't', f1, f2, SI)
+        self.state2.setState('p', 't', f1, f2, SI)
+
+        self._lbl_State1.setText(str(self.state1.__dict__))
+        self._lbl_State2.setText(str(self.state2.__dict__))
+
+#endregion
+
+#region main
+def main():
+    app = QApplication.instance() or QApplication(sys.argv)
+    main_win = main_window()
+    sys.exit(app.exec_())
+
+if __name__ == "__main__":
+    main()
