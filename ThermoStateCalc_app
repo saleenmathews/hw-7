@@ -6,7 +6,7 @@ from PyQt5.QtWidgets import QWidget, QApplication
 from UnitConversion import UC
 from scipy.optimize import fsolve
 #endregion
-
+############################################################
 #region class definitions
 class thermoSatProps:
     def __init__(self, p=None, t=None, SI=True):
@@ -117,7 +117,7 @@ class thermoState:
         delta.s = self.s - other.s
         delta.v = self.v - other.v
         return delta
-
+################################################################
 class main_window(QWidget, Ui__frm_StateCalculator):
     def __init__(self):
         super().__init__()
